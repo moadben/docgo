@@ -2,11 +2,11 @@
 package docgo
 
 import (
-	"bytes"
-	"crypto/hmac" 
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -63,19 +63,6 @@ func (s Session) GetWithHeaders(headerParams map[string]string, url string) (*ht
 	return resp, err
 }
 
-// GetWithAuth constructs a http client and sends a request with basic
-// authorization.
-func (s Session) GetWithAuth(username, password, url string) (*http.Response, error) {
-	request, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	request.SetBasicAuth(username, password)
-	resp, err := s.Client.Do(request)
-	return resp, err
-
-}
-
 //GenerateAuthToken git git git grrrah
 func (s Session) GenerateAuthToken(verb, resourceID, resourceType string) string {
 	timeNow := time.Now().UTC().Format(time.RFC1123)
@@ -99,7 +86,8 @@ func (s Session) GenerateAuthToken(verb, resourceID, resourceType string) string
 	return uri
 }
 
-func (s Session) ListDatabases() *DBListResponse {
+// ListDatabases lists the databases for the URI/Key combo in the session instance.
+func (s Session) ListDatabases() (*DBListResponse, error) {
 	x := s.GenerateAuthToken("GET", "", "dbs")
 	timeNow := time.Now().UTC().Format(time.RFC1123)
 	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
@@ -107,22 +95,27 @@ func (s Session) ListDatabases() *DBListResponse {
 	headers["Authorization"] = x
 	headers["x-ms-version"] = "2015-12-16"
 	headers["x-ms-date"] = timeUsed
-	resp, err := s.GetWithHeaders(headers, "https://auroradatastore.documents.azure.com/dbs")
+	resp, err := s.GetWithHeaders(headers, s.URI+"/dbs")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	respBody, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	body := ioutil.NopCloser(bytes.NewReader(respBody))
-	defer body.Close()
 	var out DBListResponse
 	if resp.StatusCode < 201 {
-		err = xmlUnmarshal(body, &out)
+		err = jsonUnmarshal(resp.Body, &out)
 	}
-	return &out
+	if resp.StatusCode >= 400 {
+		errResp, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body.Close()
+		return nil, errors.New("Request failed, json returned was: " + string(errResp))
+	}
+	return &out, nil
 }
 
-func (s Session) GetDatabase(id string) *Database {
+// GetDatabase Grabs the Database object mapping to the id passed in and returns a Database object.
+func (s Session) GetDatabase(id string) (*Database, error) {
 	resourceID := path.Join("dbs", id)
 	x := s.GenerateAuthToken("GET", resourceID, "dbs")
 	timeNow := time.Now().UTC().Format(time.RFC1123)
@@ -133,24 +126,24 @@ func (s Session) GetDatabase(id string) *Database {
 	headers["x-ms-date"] = timeUsed
 	resp, err := s.GetWithHeaders(headers, s.URI+"/dbs/"+id)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	respBody, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-
-	}
-	resp.Body.Close()
-	body := ioutil.NopCloser(bytes.NewReader(respBody))
-	defer body.Close()
 	var out Database
-	fmt.Println(string(respBody))
 	if resp.StatusCode < 201 {
-		err = xmlUnmarshal(body, &out)
+		err = jsonUnmarshal(resp.Body, &out)
 	}
-	return &out
+	if resp.StatusCode >= 400 {
+		errResp, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body.Close()
+		return nil, errors.New("Request failed, json returned was: " + string(errResp))
+	}
+	return &out, nil
 }
 
-func xmlUnmarshal(body io.Reader, v interface{}) error {
+func jsonUnmarshal(body io.Reader, v interface{}) error {
 	data, _ := ioutil.ReadAll(body)
 	fmt.Println(string(data))
 	return json.Unmarshal(data, v)
