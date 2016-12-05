@@ -64,7 +64,7 @@ func (s Session) GetWithHeaders(headerParams map[string]string, url string) (*ht
 }
 
 //GenerateAuthToken git git git grrrah
-func (s Session) GenerateAuthToken(verb, resourceID, resourceType string) string {
+func (s Session) GenerateAuthToken(verb, resourceID, resourceType string) (string, error) {
 	timeNow := time.Now().UTC().Format(time.RFC1123)
 	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
 	x := strings.ToLower(verb) + "\n" + strings.ToLower(resourceType) + "\n" + resourceID + "\n" + strings.ToLower(timeUsed) + "\n" + "" + "\n"
@@ -72,7 +72,7 @@ func (s Session) GenerateAuthToken(verb, resourceID, resourceType string) string
 	var keyUsed []byte
 	keyUsed, err := base64.StdEncoding.DecodeString(s.Key)
 	if err != nil {
-		fmt.Println(err)
+		return "", err
 	}
 	mac := hmac.New(sha256.New, keyUsed)
 	var buff []byte
@@ -83,12 +83,15 @@ func (s Session) GenerateAuthToken(verb, resourceID, resourceType string) string
 	masterToken := "master"
 	tokenVersion := "1.0"
 	uri := ("type=" + masterToken + "&ver=" + tokenVersion + "&sig=" + signature)
-	return uri
+	return uri, nil
 }
 
 // ListDatabases lists the databases for the URI/Key combo in the session instance.
 func (s Session) ListDatabases() (*DBListResponse, error) {
-	x := s.GenerateAuthToken("GET", "", "dbs")
+	x, err := s.GenerateAuthToken("GET", "", "dbs")
+	if err != nil {
+		return nil, err
+	}
 	timeNow := time.Now().UTC().Format(time.RFC1123)
 	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
 	headers := make(map[string]string)
@@ -117,7 +120,10 @@ func (s Session) ListDatabases() (*DBListResponse, error) {
 // GetDatabase Grabs the Database object mapping to the id passed in and returns a Database object.
 func (s Session) GetDatabase(id string) (*Database, error) {
 	resourceID := path.Join("dbs", id)
-	x := s.GenerateAuthToken("GET", resourceID, "dbs")
+	x, err := s.GenerateAuthToken("GET", resourceID, "dbs")
+	if err != nil {
+		return nil, err
+	}
 	timeNow := time.Now().UTC().Format(time.RFC1123)
 	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
 	headers := make(map[string]string)
