@@ -160,7 +160,7 @@ func (s Session) GetDatabase(id string) (*Database, error) {
 			return nil, err
 		}
 		resp.Body.Close()
-		return nil, errors.New("Request to get database " + id + "failed, json returned was: " + string(errResp))
+		return nil, errors.New("Request to get database " + id + " failed, json returned was: " + string(errResp))
 	}
 	out.Key = s.Key
 	out.URI = s.URI
@@ -228,7 +228,7 @@ func (d Database) GetCollection(id string) (*Collection, error) {
 			return nil, err
 		}
 		resp.Body.Close()
-		return nil, errors.New("Request to get database " + id + "failed, json returned was: " + string(errResp))
+		return nil, errors.New("Request to get collection " + id + " failed, json returned was: " + string(errResp))
 	}
 	out.Key = d.Key
 	out.URI = d.URI
