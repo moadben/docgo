@@ -18,12 +18,28 @@ import (
 
 // Database holds individual Database responses from docdb
 type Database struct {
-	ID string `json:"id"`
+	ID     string `json:"id"`
+	Key    string
+	Client *http.Client
+	URI    string
+}
+
+// Collection holds individual Collection responses from docdb
+type Collection struct {
+	ID     string `json:"id"`
+	Key    string
+	Client *http.Client
+	URI    string
 }
 
 // DBListResponse holds the responses for the ListDatabases method
 type DBListResponse struct {
 	Databases []Database `json:"Databases"`
+}
+
+// CollListResponse holds the responses for the ListCollections method
+type CollListResponse struct {
+	Databases []Collection `json:"DocumentCollections"`
 }
 
 // Session is a publicly available struct
@@ -51,7 +67,7 @@ func New(connString string) (Session, error) {
 
 // GetWithHeaders constructs a http client and sends a request with the passed
 // in parameters for the header
-func (s Session) GetWithHeaders(headerParams map[string]string, url string) (*http.Response, error) {
+func GetWithHeaders(headerParams map[string]string, url string, client *http.Client) (*http.Response, error) {
 	request, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -59,18 +75,18 @@ func (s Session) GetWithHeaders(headerParams map[string]string, url string) (*ht
 	for i, x := range headerParams {
 		request.Header.Add(i, x)
 	}
-	resp, err := s.Client.Do(request)
+	resp, err := client.Do(request)
 	return resp, err
 }
 
 //GenerateAuthToken git git git grrrah
-func (s Session) GenerateAuthToken(verb, resourceID, resourceType string) (string, error) {
+func GenerateAuthToken(verb, resourceID, resourceType, key string) (string, error) {
 	timeNow := time.Now().UTC().Format(time.RFC1123)
 	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
 	x := strings.ToLower(verb) + "\n" + strings.ToLower(resourceType) + "\n" + resourceID + "\n" + strings.ToLower(timeUsed) + "\n" + "" + "\n"
 	fmt.Println(x)
 	var keyUsed []byte
-	keyUsed, err := base64.StdEncoding.DecodeString(s.Key)
+	keyUsed, err := base64.StdEncoding.DecodeString(key)
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +104,7 @@ func (s Session) GenerateAuthToken(verb, resourceID, resourceType string) (strin
 
 // ListDatabases lists the databases for the URI/Key combo in the session instance.
 func (s Session) ListDatabases() (*DBListResponse, error) {
-	x, err := s.GenerateAuthToken("GET", "", "dbs")
+	x, err := GenerateAuthToken("GET", "", "dbs", s.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +114,7 @@ func (s Session) ListDatabases() (*DBListResponse, error) {
 	headers["Authorization"] = x
 	headers["x-ms-version"] = "2015-12-16"
 	headers["x-ms-date"] = timeUsed
-	resp, err := s.GetWithHeaders(headers, s.URI+"/dbs")
+	resp, err := GetWithHeaders(headers, s.URI+"/dbs", s.Client)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +128,7 @@ func (s Session) ListDatabases() (*DBListResponse, error) {
 			return nil, err
 		}
 		resp.Body.Close()
-		return nil, errors.New("Request failed, json returned was: " + string(errResp))
+		return nil, errors.New("Request to list databases failed, json returned was: " + string(errResp))
 	}
 	return &out, nil
 }
@@ -120,7 +136,7 @@ func (s Session) ListDatabases() (*DBListResponse, error) {
 // GetDatabase Grabs the Database object mapping to the id passed in and returns a Database object.
 func (s Session) GetDatabase(id string) (*Database, error) {
 	resourceID := path.Join("dbs", id)
-	x, err := s.GenerateAuthToken("GET", resourceID, "dbs")
+	x, err := GenerateAuthToken("GET", resourceID, "dbs", s.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +146,7 @@ func (s Session) GetDatabase(id string) (*Database, error) {
 	headers["Authorization"] = x
 	headers["x-ms-version"] = "2015-12-16"
 	headers["x-ms-date"] = timeUsed
-	resp, err := s.GetWithHeaders(headers, s.URI+"/dbs/"+id)
+	resp, err := GetWithHeaders(headers, s.URI+"/dbs/"+id, s.Client)
 	if err != nil {
 		return nil, err
 	}
@@ -144,8 +160,79 @@ func (s Session) GetDatabase(id string) (*Database, error) {
 			return nil, err
 		}
 		resp.Body.Close()
-		return nil, errors.New("Request failed, json returned was: " + string(errResp))
+		return nil, errors.New("Request to get database " + id + "failed, json returned was: " + string(errResp))
 	}
+	out.Key = s.Key
+	out.URI = s.URI
+	out.Client = s.Client
+	return &out, nil
+}
+
+// ListCollections lists all the collections belonging to the Database object
+func (d Database) ListCollections() (*CollListResponse, error) {
+	resourceID := path.Join("dbs", d.ID)
+	x, err := GenerateAuthToken("GET", resourceID, "colls", d.Key)
+	if err != nil {
+		return nil, err
+	}
+	timeNow := time.Now().UTC().Format(time.RFC1123)
+	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
+	headers := make(map[string]string)
+	headers["Authorization"] = x
+	headers["x-ms-version"] = "2015-12-16"
+	headers["x-ms-date"] = timeUsed
+	fmt.Println(d.URI + "/dbs/" + d.ID + "/colls")
+	resp, err := GetWithHeaders(headers, d.URI+"/dbs/"+d.ID+"/colls", d.Client)
+	if err != nil {
+		return nil, err
+	}
+	var out CollListResponse
+	if resp.StatusCode < 201 {
+		err = jsonUnmarshal(resp.Body, &out)
+	}
+	if resp.StatusCode >= 400 {
+		errResp, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body.Close()
+		return nil, errors.New("Request to list collections failed, json returned was: " + string(errResp))
+	}
+	return &out, nil
+}
+
+// GetCollection Grabs the Collection object mapping to the id passed in and returns a Collection object.
+func (d Database) GetCollection(id string) (*Collection, error) {
+	resourceID := path.Join("dbs", d.ID, "colls", id)
+	x, err := GenerateAuthToken("GET", resourceID, "colls", d.Key)
+	if err != nil {
+		return nil, err
+	}
+	timeNow := time.Now().UTC().Format(time.RFC1123)
+	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
+	headers := make(map[string]string)
+	headers["Authorization"] = x
+	headers["x-ms-version"] = "2015-12-16"
+	headers["x-ms-date"] = timeUsed
+	resp, err := GetWithHeaders(headers, d.URI+"/dbs/"+d.ID+"/colls/"+id, d.Client)
+	if err != nil {
+		return nil, err
+	}
+	var out Collection
+	if resp.StatusCode < 201 {
+		err = jsonUnmarshal(resp.Body, &out)
+	}
+	if resp.StatusCode >= 400 {
+		errResp, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body.Close()
+		return nil, errors.New("Request to get database " + id + "failed, json returned was: " + string(errResp))
+	}
+	out.Key = d.Key
+	out.URI = d.URI
+	out.Client = d.Client
 	return &out, nil
 }
 
