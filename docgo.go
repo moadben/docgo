@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -80,15 +81,22 @@ func GetWithHeaders(headerParams map[string]string, url string, client *http.Cli
 }
 
 //GenerateAuthToken git git git grrrah
-func GenerateAuthToken(verb, resourceID, resourceType, key string) (string, error) {
+func GenerateAuthToken(verb, resourceID, resourceType, key string) (string, string, error) {
 	timeNow := time.Now().UTC().Format(time.RFC1123)
+	fmt.Println(len(timeNow))
 	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
-	x := strings.ToLower(verb) + "\n" + strings.ToLower(resourceType) + "\n" + resourceID + "\n" + strings.ToLower(timeUsed) + "\n" + "" + "\n"
+
+	x := fmt.Sprintf("%s\n%s\n%s\n%s\n\n",
+		strings.ToLower(verb),
+		strings.ToLower(resourceType),
+		resourceID,
+		strings.ToLower(timeUsed))
+
 	fmt.Println(x)
 	var keyUsed []byte
 	keyUsed, err := base64.StdEncoding.DecodeString(key)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	mac := hmac.New(sha256.New, keyUsed)
 	var buff []byte
@@ -98,21 +106,19 @@ func GenerateAuthToken(verb, resourceID, resourceType, key string) (string, erro
 	fmt.Println(signature)
 	masterToken := "master"
 	tokenVersion := "1.0"
-	uri := ("type=" + masterToken + "&ver=" + tokenVersion + "&sig=" + signature)
-	return uri, nil
+	uri := url.QueryEscape("type=" + masterToken + "&ver=" + tokenVersion + "&sig=" + signature)
+	return uri, timeUsed, nil
 }
 
 // ListDatabases lists the databases for the URI/Key combo in the session instance.
 func (s Session) ListDatabases() (*DBListResponse, error) {
-	x, err := GenerateAuthToken("GET", "", "dbs", s.Key)
+	x, timeUsed, err := GenerateAuthToken("GET", "", "dbs", s.Key)
 	if err != nil {
 		return nil, err
 	}
-	timeNow := time.Now().UTC().Format(time.RFC1123)
-	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
 	headers := make(map[string]string)
 	headers["Authorization"] = x
-	headers["x-ms-version"] = "2015-12-16"
+	//headers["x-ms-version"] = "2015-12-16"
 	headers["x-ms-date"] = timeUsed
 	resp, err := GetWithHeaders(headers, s.URI+"/dbs", s.Client)
 	if err != nil {
@@ -136,12 +142,10 @@ func (s Session) ListDatabases() (*DBListResponse, error) {
 // GetDatabase Grabs the Database object mapping to the id passed in and returns a Database object.
 func (s Session) GetDatabase(id string) (*Database, error) {
 	resourceID := path.Join("dbs", id)
-	x, err := GenerateAuthToken("GET", resourceID, "dbs", s.Key)
+	x, timeUsed, err := GenerateAuthToken("GET", resourceID, "dbs", s.Key)
 	if err != nil {
 		return nil, err
 	}
-	timeNow := time.Now().UTC().Format(time.RFC1123)
-	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
 	headers := make(map[string]string)
 	headers["Authorization"] = x
 	headers["x-ms-version"] = "2015-12-16"
@@ -171,12 +175,10 @@ func (s Session) GetDatabase(id string) (*Database, error) {
 // ListCollections lists all the collections belonging to the Database object
 func (d Database) ListCollections() (*CollListResponse, error) {
 	resourceID := path.Join("dbs", d.ID)
-	x, err := GenerateAuthToken("GET", resourceID, "colls", d.Key)
+	x, timeUsed, err := GenerateAuthToken("GET", resourceID, "colls", d.Key)
 	if err != nil {
 		return nil, err
 	}
-	timeNow := time.Now().UTC().Format(time.RFC1123)
-	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
 	headers := make(map[string]string)
 	headers["Authorization"] = x
 	headers["x-ms-version"] = "2015-12-16"
@@ -204,12 +206,10 @@ func (d Database) ListCollections() (*CollListResponse, error) {
 // GetCollection Grabs the Collection object mapping to the id passed in and returns a Collection object.
 func (d Database) GetCollection(id string) (*Collection, error) {
 	resourceID := path.Join("dbs", d.ID, "colls", id)
-	x, err := GenerateAuthToken("GET", resourceID, "colls", d.Key)
+	x, timeUsed, err := GenerateAuthToken("GET", resourceID, "colls", d.Key)
 	if err != nil {
 		return nil, err
 	}
-	timeNow := time.Now().UTC().Format(time.RFC1123)
-	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
 	headers := make(map[string]string)
 	headers["Authorization"] = x
 	headers["x-ms-version"] = "2015-12-16"
