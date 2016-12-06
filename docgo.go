@@ -2,6 +2,7 @@
 package docgo
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -52,24 +53,42 @@ type Session struct {
 	URI    string
 }
 
-// New initializes a new Session object, it demonstrates how new objects are
-// created in Golang
+// New creates a new session object out of a DocumentDB connection string
 func New(connString string) (Session, error) {
 	client := &http.Client{}
 	sessionParams := strings.Split(connString, "AccountKey=")
 
 	uri := strings.Trim(strings.TrimPrefix(sessionParams[0], "AccountEndpoint="), "/;")
 	key := strings.Trim(sessionParams[1], ";")
-	fmt.Println(key)
 	s := Session{Client: client, URI: uri, Key: key}
 
 	return s, nil
 }
 
-// GetWithHeaders constructs a http client and sends a request with the passed
+type nopCloser struct {
+	io.Reader
+}
+
+func (nopCloser) Close() error { return nil }
+
+// ReqWithHeaders constructs a http client and sends a request with the passed
 // in parameters for the header
-func GetWithHeaders(headerParams map[string]string, url string, client *http.Client) (*http.Response, error) {
-	request, err := http.NewRequest("GET", url, nil)
+func ReqWithHeaders(headerParams map[string]string, verb, url string, client *http.Client) (*http.Response, error) {
+	request, err := http.NewRequest(verb, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	for i, x := range headerParams {
+		request.Header.Add(i, x)
+	}
+	resp, err := client.Do(request)
+	return resp, err
+}
+
+// PostWithHeaders constructs a http client and sends a request with the passed
+// in parameters for the header
+func PostWithHeaders(headerParams map[string]string, verb, url string, client *http.Client, body io.ReadCloser) (*http.Response, error) {
+	request, err := http.NewRequest(verb, url, body)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +102,6 @@ func GetWithHeaders(headerParams map[string]string, url string, client *http.Cli
 //GenerateAuthToken git git git grrrah
 func GenerateAuthToken(verb, resourceID, resourceType, key string) (string, string, error) {
 	timeNow := time.Now().UTC().Format(time.RFC1123)
-	fmt.Println(len(timeNow))
 	timeUsed := timeNow[:len(timeNow)-3] + "GMT"
 
 	x := fmt.Sprintf("%s\n%s\n%s\n%s\n\n",
@@ -103,7 +121,6 @@ func GenerateAuthToken(verb, resourceID, resourceType, key string) (string, stri
 	mac.Write([]byte(x))
 	buff = mac.Sum(nil)
 	signature := base64.StdEncoding.EncodeToString(buff)
-	fmt.Println(signature)
 	masterToken := "master"
 	tokenVersion := "1.0"
 	uri := url.QueryEscape("type=" + masterToken + "&ver=" + tokenVersion + "&sig=" + signature)
@@ -118,9 +135,9 @@ func (s Session) ListDatabases() (*DBListResponse, error) {
 	}
 	headers := make(map[string]string)
 	headers["Authorization"] = x
-	//headers["x-ms-version"] = "2015-12-16"
+	headers["x-ms-version"] = "2015-12-16"
 	headers["x-ms-date"] = timeUsed
-	resp, err := GetWithHeaders(headers, s.URI+"/dbs", s.Client)
+	resp, err := ReqWithHeaders(headers, "GET", s.URI+"/dbs", s.Client)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +167,7 @@ func (s Session) GetDatabase(id string) (*Database, error) {
 	headers["Authorization"] = x
 	headers["x-ms-version"] = "2015-12-16"
 	headers["x-ms-date"] = timeUsed
-	resp, err := GetWithHeaders(headers, s.URI+"/dbs/"+id, s.Client)
+	resp, err := ReqWithHeaders(headers, "GET", s.URI+"/dbs/"+id, s.Client)
 	if err != nil {
 		return nil, err
 	}
@@ -183,8 +200,7 @@ func (d Database) ListCollections() (*CollListResponse, error) {
 	headers["Authorization"] = x
 	headers["x-ms-version"] = "2015-12-16"
 	headers["x-ms-date"] = timeUsed
-	fmt.Println(d.URI + "/dbs/" + d.ID + "/colls")
-	resp, err := GetWithHeaders(headers, d.URI+"/dbs/"+d.ID+"/colls", d.Client)
+	resp, err := ReqWithHeaders(headers, "GET", d.URI+"/dbs/"+d.ID+"/colls", d.Client)
 	if err != nil {
 		return nil, err
 	}
@@ -210,11 +226,58 @@ func (d Database) GetCollection(id string) (*Collection, error) {
 	if err != nil {
 		return nil, err
 	}
+	collID := []byte(id)
+	var body io.ReadCloser
+	body.Read(collID)
 	headers := make(map[string]string)
 	headers["Authorization"] = x
 	headers["x-ms-version"] = "2015-12-16"
 	headers["x-ms-date"] = timeUsed
-	resp, err := GetWithHeaders(headers, d.URI+"/dbs/"+d.ID+"/colls/"+id, d.Client)
+	resp, err := ReqWithHeaders(headers, "GET", d.URI+"/dbs/"+d.ID+"/colls/"+id, d.Client)
+	if err != nil {
+		return nil, err
+	}
+	var out Collection
+	if resp.StatusCode < 201 {
+		err = jsonUnmarshal(resp.Body, &out)
+	}
+	if resp.StatusCode >= 400 {
+		errResp, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body.Close()
+		return nil, errors.New("Request to get collection " + id + " failed, json returned was: " + string(errResp))
+	}
+	out.Key = d.Key
+	out.URI = d.URI
+	out.Client = d.Client
+	return &out, nil
+}
+
+//CreateCollection creates a collection DUH
+func (d Database) CreateCollection(id string) (*Collection, error) {
+	resourceID := path.Join("dbs", d.ID)
+	x, timeUsed, err := GenerateAuthToken("POST", resourceID, "colls", d.Key)
+	if err != nil {
+		return nil, err
+	}
+	reqID := struct {
+		ID string `json:"id"`
+	}{
+		id,
+	}
+	buff, err := json.Marshal(reqID)
+	if err != nil {
+		return nil, err
+	}
+	body := nopCloser{bytes.NewBuffer(buff)}
+	headers := make(map[string]string)
+	headers["Authorization"] = x
+	headers["x-ms-version"] = "2015-12-16"
+	headers["x-ms-date"] = timeUsed
+	headers["Content-Type"] = "application/query+json"
+	resp, err := PostWithHeaders(headers, "POST", d.URI+"/dbs/"+d.ID+"/colls", d.Client, body)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +301,5 @@ func (d Database) GetCollection(id string) (*Collection, error) {
 
 func jsonUnmarshal(body io.Reader, v interface{}) error {
 	data, _ := ioutil.ReadAll(body)
-	fmt.Println(string(data))
 	return json.Unmarshal(data, v)
 }
